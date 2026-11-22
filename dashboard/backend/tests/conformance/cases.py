@@ -1115,8 +1115,7 @@ PREDICTIONS_D: Dict[str, Prediction] = {
     "T05": _p(FAIL, ("fills", "cash", "equity"), ("D2", "D16"),
               "the 13:00 bucket fills at the 12:55 bar's close, as T02's 16:00 bucket does "
               "(bar_aggregation.plan_execution_fills); D19's lost decision is gone since #638"),
-    "C01": _p(FAIL, ("fills", "orders", "cash", "positions"), ("D5",),
-              "actions run in listed order; the buy is rejected before the sell funds it (execution.py:442)"),
+    "C01": _p(PASS, note="sells run before buys of other symbols (execution.sells_first); D5 is fixed"),
     "C02": _p(FAIL, ("fills", "orders", "cash", "positions"), ("D6", "D8"),
               "buys are all-or-nothing, so o1 is rejected (execution.py:612-626)"),
     "C03": _p(FAIL, ("fills", "orders", "cash", "positions"), ("D6",),
@@ -1162,8 +1161,8 @@ PREDICTIONS_D: Dict[str, Prediction] = {
 PREDICTIONS_DL: Dict[str, Prediction] = {
     # Since #661 a SELL sells the size it names, so C01's sell of 5 fills 5 and
     # D18 is left with the size-0 SELL and the batch cut.
-    "C01": _p(FAIL, ("fills", "orders", "cash", "positions", "invariants"), ("D5",),
-              "the buy is pre-checked on pre-batch cash and dropped"),
+    "C01": _p(PASS, note="the buy is checked on the cash plus this step's sell proceeds "
+                         "(PortfolioManager._fund_buys_from_sells); D5 is fixed"),
     "C04": _p(FAIL, ("fills", "orders", "invariants"), ("D18",),
               "a size-0 SELL is the whole position and the batch is cut to one action per symbol"),
     "S01": _p(FAIL, ("fills", "cash", "positions", "avg_cost", "realized_pnl", "equity", "invariants"),

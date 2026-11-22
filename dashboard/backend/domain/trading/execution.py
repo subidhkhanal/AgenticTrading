@@ -417,6 +417,27 @@ def calculate_transaction_costs(
     }
 
 
+def sells_first(actions: List[Dict]) -> List[Dict]:
+    """``actions`` with each sell moved ahead of the buys, so a buy listed
+    before the sell that pays for it does not fail for cash the sell would
+    have freed: the listed order no longer decides what fills.
+
+    A sell stays behind an earlier buy of its own symbol ("buy 10, sell 4"
+    nets 6; run first it would sell shares not yet held). Everything else
+    keeps the order given.
+    """
+    bought = set()
+    sells, rest = [], []
+    for action in actions:
+        if action.get("action") == "sell" and action.get("symbol") not in bought:
+            sells.append(action)
+        else:
+            if action.get("action") == "buy":
+                bought.add(action.get("symbol"))
+            rest.append(action)
+    return sells + rest
+
+
 def execute_actions(
     *,
     actions: List[Dict],
@@ -488,7 +509,7 @@ def execute_actions(
             frozen_lots=frozen_lots,
         )
 
-    for action in actions:
+    for action in sells_first(actions):
         symbol = action.get("symbol")
         action_type = action.get("action")
         shares = action.get("shares", 0)

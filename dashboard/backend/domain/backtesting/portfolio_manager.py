@@ -308,6 +308,9 @@ class PortfolioManager:
         self.unusable_confidence_actions = 0
         self.unusable_confidence_skipped = 0
         self.confidence_skipped_steps = 0
+        # LLM buys the cash before the step could not pay for, carried out
+        # because sells in the same answer did (_fund_buys_from_sells).
+        self.buys_paid_by_sells = 0
         self._unusable_confidence_reported = False
         self.input_tokens = 0
         self.output_tokens = 0
@@ -1189,6 +1192,10 @@ class PortfolioManager:
             # Whether any action named buy, sell or hold. A batch where none
             # did carried no decision the model can be credited with (#658).
             recognised_any = False
+            # Buys the cash before this step cannot pay for: checked once the
+            # step's sells are known, so a sell pays for a buy wherever the
+            # model listed it (_fund_buys_from_sells).
+            waiting_for_sells = []
             for llm_action in llm_actions:
                 symbol = normalize_symbol(str(llm_action.get("symbol") or ""))
                 # Read by the same rule as the strict check above: two readings
@@ -1288,9 +1295,16 @@ class PortfolioManager:
                         # on the safe path; a free-form strategy_prompt must
                         # not push an unbounded order through this loop.
                         print(f"      ⚠️  BUY {symbol}: Skip (position_size {shares} > per-order cap {MAX_ORDER_SHARES})")
-                    elif shares > 0 and (
-                        self.lot_size > 1 or shares * price <= self.cash
-                    ):
+                    elif shares > 0 and self.lot_size == 1 and shares * price > self.cash:
+                        waiting_for_sells.append(({
+                            "symbol": symbol,
+                            "action": "buy",
+                            "shares": shares,
+                            "reason": f"[LLM] {reasoning} (confidence: {conf_label})",
+                            "confidence": confidence
+                        }, price))
+                        print(f"      ⏳ BUY {symbol}: {shares} shares @ ${price:.2f} waits for this step's sells (need ${shares*price:,.0f}, have ${self.cash:,.0f})")
+                    elif shares > 0:
                         actions.append({
                             "symbol": symbol,
                             "action": "buy",
@@ -1364,6 +1378,11 @@ class PortfolioManager:
                 print("   ⚠️  No action named buy, sell or hold; holding this step\n")
                 return {"actions": []}
 
+            if waiting_for_sells:
+                actions.extend(
+                    self._fund_buys_from_sells(waiting_for_sells, actions, signals)
+                )
+
             # H6 coverage increment #2 of 2 — the main success exit: the model's
             # actions were parsed AND processed without error, so the returned
             # decision is genuinely the model's. This is the H6 coverage
@@ -1416,6 +1435,32 @@ class PortfolioManager:
             print(f"\n❌ LLM decision error: {e}")
             print(f"   Falling back to rule-based logic\n")
             return self.make_trading_decision(portfolio_state)
+
+    def _fund_buys_from_sells(self, waiting, actions, signals):
+        """Buys from ``waiting`` that the cash plus this step's sell proceeds
+        pay for, each checked on its own as a buy within the cash is.
+
+        The sells are priced at the decision bar, like the buy; the executor
+        runs every sell before any buy, so the proceeds exist when the buy
+        fills. Counting them here, whatever order the model listed its actions
+        in, is what stops that order deciding whether a buy goes through.
+        """
+        sell_cash = sum(
+            action["shares"] * float(signals.get(action["symbol"], {}).get("price") or 0.0)
+            for action in actions
+            if action["action"] == "sell"
+        )
+        funded = []
+        for action, price in waiting:
+            cost = action["shares"] * price
+            symbol = action["symbol"]
+            if sell_cash and cost <= self.cash + sell_cash:
+                funded.append(action)
+                self.buys_paid_by_sells += 1
+                print(f"      ✅ BUY {symbol}: {action['shares']} shares @ ${price:.2f} (paid by this step's sells: ${sell_cash:,.0f})")
+            else:
+                print(f"      ⚠️  BUY {symbol}: Skip (insufficient cash: need ${cost:,.0f}, have ${self.cash:,.0f} + ${sell_cash:,.0f} from this step's sells)")
+        return funded
 
     def _note_unusable_confidence(self) -> None:
         """Count one action whose confidence is not a 0-1 number.

@@ -1,35 +1,4 @@
 {
-  "C01/D": {
-    "cash": [
-      "cash: expected 0, actual 500"
-    ],
-    "fills": [
-      "fills[o2@2026-03-02T11:30:00-05:00]: expected price 50 qty 10, actual no fill on that bar"
-    ],
-    "orders": [
-      "orders[o2]: expected filled/- filled 10, actual rejected/insufficient_cash filled 0"
-    ],
-    "positions": [
-      "positions[MSFT]: expected 10, actual not held"
-    ]
-  },
-  "C01/DL": {
-    "cash": [
-      "cash: expected 0, actual 500"
-    ],
-    "fills": [
-      "fills[o2@2026-03-02T11:30:00-05:00]: expected price 50 qty 10, actual no fill on that bar"
-    ],
-    "invariants": [
-      "invariant 7: o2 has 0 terminal OrderFinal(s), expected 1"
-    ],
-    "orders": [
-      "orders[o2]: expected filled/- filled 10, actual no terminal OrderFinal"
-    ],
-    "positions": [
-      "positions[MSFT]: expected 10, actual not held"
-    ]
-  },
   "C02/D": {
     "cash": [
       "cash: expected 0, actual 1000"
