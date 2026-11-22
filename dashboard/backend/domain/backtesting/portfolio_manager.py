@@ -35,7 +35,10 @@ from typing import Any, Dict, List, Mapping, Optional
 
 import pandas as pd
 
-from dashboard.backend.domain.backtesting.constants import INITIAL_CAPITAL
+from dashboard.backend.domain.backtesting.constants import (
+    INITIAL_CAPITAL,
+    MAX_POSITION_FRACTION,
+)
 from dashboard.backend.infrastructure.llm.validator import (
     DJIA_30,
     LLM_ACTION_DEFAULT_CONFIDENCE,
@@ -309,8 +312,11 @@ class PortfolioManager:
         self.unusable_confidence_skipped = 0
         self.confidence_skipped_steps = 0
         # LLM buys the cash before the step could not pay for, carried out
-        # because sells in the same answer did (_fund_buys_from_sells).
+        # because sells in the same answer did (_fit_buys).
         self.buys_paid_by_sells = 0
+        # LLM buys made smaller (or dropped) to fit the per-stock limit or the
+        # cash left: what the model asked for and what was bought differ.
+        self.buys_resized = 0
         self._unusable_confidence_reported = False
         self.input_tokens = 0
         self.output_tokens = 0
@@ -917,7 +923,16 @@ class PortfolioManager:
                     value = signal.get(field)
                     if value is not None and pd.notna(value):
                         market_snapshot["top_signals"][symbol][field] = str(value)
-            
+                if self.lot_size == 1 and price > 0:
+                    # The limit _fit_buys enforces after the reply, shown up
+                    # front so the model picks among stocks it can buy
+                    # instead of having its buys cut or dropped unseen.
+                    market_snapshot["top_signals"][symbol]["max_buy_shares"] = (
+                        self._max_buy_shares(
+                            symbol, price, portfolio_state["total_equity"]
+                        )
+                    )
+
             # Ensure market_snapshot is fully JSON-serializable before sending
             try:
                 json.dumps(market_snapshot)  # Verify it's serializable
@@ -1192,10 +1207,6 @@ class PortfolioManager:
             # Whether any action named buy, sell or hold. A batch where none
             # did carried no decision the model can be credited with (#658).
             recognised_any = False
-            # Buys the cash before this step cannot pay for: checked once the
-            # step's sells are known, so a sell pays for a buy wherever the
-            # model listed it (_fund_buys_from_sells).
-            waiting_for_sells = []
             for llm_action in llm_actions:
                 symbol = normalize_symbol(str(llm_action.get("symbol") or ""))
                 # Read by the same rule as the strict check above: two readings
@@ -1295,16 +1306,10 @@ class PortfolioManager:
                         # on the safe path; a free-form strategy_prompt must
                         # not push an unbounded order through this loop.
                         print(f"      ⚠️  BUY {symbol}: Skip (position_size {shares} > per-order cap {MAX_ORDER_SHARES})")
-                    elif shares > 0 and self.lot_size == 1 and shares * price > self.cash:
-                        waiting_for_sells.append(({
-                            "symbol": symbol,
-                            "action": "buy",
-                            "shares": shares,
-                            "reason": f"[LLM] {reasoning} (confidence: {conf_label})",
-                            "confidence": confidence
-                        }, price))
-                        print(f"      ⏳ BUY {symbol}: {shares} shares @ ${price:.2f} waits for this step's sells (need ${shares*price:,.0f}, have ${self.cash:,.0f})")
                     elif shares > 0:
+                        # Sized against the per-stock limit and the cash plus
+                        # this step's sell proceeds once the whole batch is
+                        # known (_fit_buys), whatever order it was listed in.
                         actions.append({
                             "symbol": symbol,
                             "action": "buy",
@@ -1314,7 +1319,7 @@ class PortfolioManager:
                         })
                         print(f"      ✅ BUY {symbol}: {shares} shares @ ${price:.2f} (conf: {conf_label})")
                     else:
-                        print(f"      ⚠️  BUY {symbol}: Skip (insufficient cash: need ${shares*price:,.0f}, have ${self.cash:,.0f})")
+                        print(f"      ⚠️  BUY {symbol}: Skip (sized to 0 shares)")
                 
                 elif action_type == "sell":
                     held = self.positions.get(symbol, 0)
@@ -1378,9 +1383,11 @@ class PortfolioManager:
                 print("   ⚠️  No action named buy, sell or hold; holding this step\n")
                 return {"actions": []}
 
-            if waiting_for_sells:
-                actions.extend(
-                    self._fund_buys_from_sells(waiting_for_sells, actions, signals)
+            if self.lot_size == 1:
+                # A-share lots are left to the executor, which rejects an
+                # invalid lot visibly instead of resizing it.
+                actions = self._fit_buys(
+                    actions, signals, portfolio_state["total_equity"]
                 )
 
             # H6 coverage increment #2 of 2 — the main success exit: the model's
@@ -1436,32 +1443,6 @@ class PortfolioManager:
             print(f"   Falling back to rule-based logic\n")
             return self.make_trading_decision(portfolio_state)
 
-    def _fund_buys_from_sells(self, waiting, actions, signals):
-        """Buys from ``waiting`` that the cash plus this step's sell proceeds
-        pay for, each checked on its own as a buy within the cash is.
-
-        The sells are priced at the decision bar, like the buy; the executor
-        runs every sell before any buy, so the proceeds exist when the buy
-        fills. Counting them here, whatever order the model listed its actions
-        in, is what stops that order deciding whether a buy goes through.
-        """
-        sell_cash = sum(
-            action["shares"] * float(signals.get(action["symbol"], {}).get("price") or 0.0)
-            for action in actions
-            if action["action"] == "sell"
-        )
-        funded = []
-        for action, price in waiting:
-            cost = action["shares"] * price
-            symbol = action["symbol"]
-            if sell_cash and cost <= self.cash + sell_cash:
-                funded.append(action)
-                self.buys_paid_by_sells += 1
-                print(f"      ✅ BUY {symbol}: {action['shares']} shares @ ${price:.2f} (paid by this step's sells: ${sell_cash:,.0f})")
-            else:
-                print(f"      ⚠️  BUY {symbol}: Skip (insufficient cash: need ${cost:,.0f}, have ${self.cash:,.0f} + ${sell_cash:,.0f} from this step's sells)")
-        return funded
-
     def _note_unusable_confidence(self) -> None:
         """Count one action whose confidence is not a 0-1 number.
 
@@ -1497,6 +1478,81 @@ class PortfolioManager:
         self.output_tokens += output_delta
         self.llm_calls += 1
         return output_delta
+
+    def _fit_buys(
+        self, actions: List[Dict], signals: Mapping, total_equity: float
+    ) -> List[Dict]:
+        """Fit one step's LLM buys to the per-stock limit and to the cash.
+
+        Each buy is cut so its stock (shares already held included) stays at
+        or under ``MAX_POSITION_FRACTION`` of total equity. If the buys still
+        cost more than the cash plus this step's sell proceeds together, every
+        one shrinks by the same fraction, so the model's list order no longer
+        decides which stock gets the money. Whole shares, rounded down; a buy
+        left at 0 is dropped. Priced at the decision bar: the fill is at the
+        next bar's open. The executor runs every sell before any buy
+        (``execution.sells_first``), so the proceeds exist when the buys fill.
+        """
+        def price_of(action):
+            return float(signals.get(action["symbol"], {}).get("price") or 0.0)
+
+        limit = total_equity * MAX_POSITION_FRACTION
+        planned: Dict[str, float] = {}
+        fitted: List[Dict] = []
+        for action in actions:
+            price = price_of(action)
+            if action["action"] != "buy" or price <= 0:
+                fitted.append(action)
+                continue
+            symbol = action["symbol"]
+            held = self.positions.get(symbol, 0) * price + planned.get(symbol, 0.0)
+            allowed = min(action["shares"], int(max(limit - held, 0.0) // price))
+            self._resize_buy(
+                action, allowed,
+                f"over the {MAX_POSITION_FRACTION:.0%} per-stock limit of ${limit:,.0f}",
+            )
+            if action["shares"] > 0:
+                planned[symbol] = planned.get(symbol, 0.0) + action["shares"] * price
+                fitted.append(action)
+
+        sell_cash = sum(
+            a["shares"] * price_of(a) for a in fitted if a["action"] == "sell"
+        )
+        available = max(self.cash, 0.0) + sell_cash
+        buys = [a for a in fitted if a["action"] == "buy" and price_of(a) > 0]
+        cost = sum(a["shares"] * price_of(a) for a in buys)
+        if cost > available:
+            scale = available / cost
+            for action in buys:
+                self._resize_buy(
+                    action, int(action["shares"] * scale),
+                    f"the step's buys cost ${cost:,.0f}, cash is ${self.cash:,.0f}"
+                    + (f" + ${sell_cash:,.0f} from this step's sells" if sell_cash else ""),
+                )
+            fitted = [a for a in fitted if not (a["action"] == "buy" and a["shares"] == 0)]
+        spent = sum(a["shares"] * price_of(a) for a in fitted if a["action"] == "buy" and price_of(a) > 0)
+        if sell_cash and spent > self.cash:
+            # These buys go through only because this step's sells pay for them.
+            paid = [a for a in fitted if a["action"] == "buy" and price_of(a) > 0]
+            self.buys_paid_by_sells += len(paid)
+            print(f"      💱 {len(paid)} buy(s) paid in part by this step's sells (${sell_cash:,.0f})")
+        return fitted
+
+    def _max_buy_shares(self, symbol: str, price: float, total_equity: float) -> int:
+        """Most whole shares of ``symbol`` a buy may add this step: what the
+        per-stock limit leaves after the shares already held, and no more
+        than the cash pays for. ``_fit_buys`` still enforces both."""
+        room = total_equity * MAX_POSITION_FRACTION - self.positions.get(symbol, 0) * price
+        return int(max(min(room, self.cash), 0.0) // price)
+
+    def _resize_buy(self, action: Dict, shares: int, why: str) -> None:
+        if shares == action["shares"]:
+            return
+        verb = "Skip" if shares == 0 else f"{action['shares']} -> {shares} shares"
+        print(f"      ✂️  BUY {action['symbol']}: {verb} ({why})")
+        action.setdefault("requested_shares", action["shares"])
+        action["shares"] = shares
+        self.buys_resized += 1
 
     def strict_llm_fallback_budget(self) -> int:
         """How many unusable model responses this strict run may absorb."""

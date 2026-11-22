@@ -250,7 +250,7 @@ def test_a_stop_beside_a_buy_does_not_sell_the_holding():
     """A stop priced for the new position was a market sell of the old one,
     and on a one-symbol universe the pair broke the cap and failed a strict
     bar."""
-    pm = _holding(500, allowed_symbols=["AAPL"])
+    pm = _holding(100, allowed_symbols=["AAPL"])
     actions = _pipeline_decide(pm, {
         "orders": [{"symbol": "AAPL", "side": "buy", "qty": 10}],
         "risk_actions": [{"symbol": "AAPL", "action": "stop_loss", "stop_loss_price": 90}],

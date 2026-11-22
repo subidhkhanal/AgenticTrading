@@ -254,8 +254,8 @@ class _PipelineStub:
 def test_llm_pipeline_bars_record_intent_and_fallback(monkeypatch, store):
     stub = _PipelineStub([
         json.dumps({"actions": [{
-            "symbol": "AAPL", "action": "buy", "position_size": 5, "confidence": 0.9,
-            "reasoning": "buy five", "api_key": "must-not-be-stored",
+            "symbol": "AAPL", "action": "buy", "position_size": 2, "confidence": 0.9,
+            "reasoning": "buy two", "api_key": "must-not-be-stored",
         }]}),
         "this is not json",
     ])
@@ -264,11 +264,11 @@ def test_llm_pipeline_bars_record_intent_and_fallback(monkeypatch, store):
 
     assert tape[0]["decision"]["driver"] == "llm"
     assert tape[0]["decision"]["intent"] == {"orders": [{
-        "symbol": "AAPL", "action": "buy", "position_size": 5,
-        "confidence": 0.9, "reasoning": "buy five",
+        "symbol": "AAPL", "action": "buy", "position_size": 2,
+        "confidence": 0.9, "reasoning": "buy two",
     }]}
-    assert tape[0]["decision"]["actions"][0]["shares"] == 5
-    assert tape[0]["decision"]["gate_rewrote"] is False  # asked 5, admitted 5
+    assert tape[0]["decision"]["actions"][0]["shares"] == 2
+    assert tape[0]["decision"]["gate_rewrote"] is False  # asked 2, admitted 2
 
     assert tape[1]["decision"]["driver"] == "llm_fallback"
     assert tape[1]["decision"]["intent"] == {"unparsed": True, "completed_steps": 0}
@@ -276,11 +276,11 @@ def test_llm_pipeline_bars_record_intent_and_fallback(monkeypatch, store):
 
 
 def test_llm_sell_trim_is_sold_as_asked_and_is_not_a_rewrite(monkeypatch, store):
-    """A model SELL of 1 share out of 4 sells 1 (#661): the gate honoured the
+    """A model SELL of 1 share out of 2 sells 1 (#661): the gate honoured the
     size, so it is not a rewrite. A BUY the gate drops (confidence under 0.3)
     is a rewrite, per bar and per run."""
     stub = _PipelineStub([
-        json.dumps({"actions": [{"symbol": "AAPL", "action": "buy", "position_size": 4, "confidence": 0.9, "reasoning": "open"}]}),
+        json.dumps({"actions": [{"symbol": "AAPL", "action": "buy", "position_size": 2, "confidence": 0.9, "reasoning": "open"}]}),
         json.dumps({"actions": [{"symbol": "AAPL", "action": "sell", "position_size": 1, "confidence": 0.9, "reasoning": "trim one"}]}),
         json.dumps({"actions": [{"symbol": "MSFT", "action": "buy", "position_size": 2, "confidence": 0.1, "reasoning": "unsure"}]}),
     ])
@@ -333,9 +333,9 @@ def test_intent_replay_keeps_null_and_non_finite_fields(monkeypatch, store):
     default, as an absent one does. The tape must hand the replay the same
     values."""
     script = [
-        json.dumps({"actions": [{"symbol": "AAPL", "action": "buy", "position_size": 3, "confidence": None, "reasoning": "null conf"}]}),
+        json.dumps({"actions": [{"symbol": "AAPL", "action": "buy", "position_size": 1, "confidence": None, "reasoning": "null conf"}]}),
         json.dumps({"actions": [{"symbol": "MSFT", "action": "buy", "position_size": float("inf"), "confidence": 0.9, "reasoning": "inf size"}]}),
-        json.dumps({"actions": [{"symbol": "AAPL", "action": "buy", "position_size": 2, "confidence": 0.9, "reasoning": None}]}),
+        json.dumps({"actions": [{"symbol": "AAPL", "action": "buy", "position_size": 1, "confidence": 0.9, "reasoning": None}]}),
         json.dumps({"actions": [{"symbol": "AAPL", "action": "buy", "position_size": 1, "confidence": 0.9, "reasoning": "ok"}]}),
     ]
     pipeline = [{"label": "Decision", "prompt": "Decide."}]

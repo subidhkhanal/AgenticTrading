@@ -51,6 +51,11 @@ from typing import Any, Optional
 # Default starting capital for a backtest when none is requested.
 INITIAL_CAPITAL = 1000
 
+# Most of the account one stock may hold after an LLM buy, as the decision
+# prompt already tells the model ("never more than 25% ... on one new stock").
+# Whole shares round down, so at $1,000 a stock priced over $250 cannot be bought.
+MAX_POSITION_FRACTION = 0.25
+
 # Hard floor on simulation capital for a single backtest / protocol run.
 # Zero is deliberately inclusive; see the ⚠ note in the module docstring.
 MIN_BACKTEST_INITIAL_CAPITAL = 0

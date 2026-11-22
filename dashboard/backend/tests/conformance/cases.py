@@ -1161,8 +1161,12 @@ PREDICTIONS_D: Dict[str, Prediction] = {
 PREDICTIONS_DL: Dict[str, Prediction] = {
     # Since #661 a SELL sells the size it names, so C01's sell of 5 fills 5 and
     # D18 is left with the size-0 SELL and the batch cut.
-    "C01": _p(PASS, note="the buy is checked on the cash plus this step's sell proceeds "
-                         "(PortfolioManager._fund_buys_from_sells); D5 is fixed"),
+    # Each buy here is 100% or 50% of a $1,000 account; the translator cuts it
+    # to the 25% per-stock limit (PortfolioManager._fit_buys), which the
+    # reference does not model, so the sizes differ. D5 is fixed: the buys are
+    # sized on the cash plus this step's sell proceeds.
+    "C01": _p(FAIL, ("fills", "orders", "cash", "positions"), ("D20",),
+              "buys are cut to the 25% per-stock limit"),
     "C04": _p(FAIL, ("fills", "orders", "invariants"), ("D18",),
               "a size-0 SELL is the whole position and the batch is cut to one action per symbol"),
     "S01": _p(FAIL, ("fills", "cash", "positions", "avg_cost", "realized_pnl", "equity", "invariants"),

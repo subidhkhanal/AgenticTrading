@@ -872,6 +872,7 @@ Position sizing:
 - Medium BUY: use about 10% of portfolio value.
 - Strong BUY: use about 15% to 20% of portfolio value.
 - Never use more than 25% of portfolio value on one new stock.
+- When a stock in top_signals has max_buy_shares, never BUY more shares of it than that: it is what the 25% limit and your cash before any sells allow this step. A larger BUY is cut to fit the limit and the cash, counting SELLs in this same answer; max_buy_shares 0 means you cannot buy that stock now, so pick another.
 - Size positions so that, across the portfolio, you stay close to fully invested when setups justify it.
 - position_size must be an integer share count.
 - If price or cash is missing, use position_size 1 for BUY.

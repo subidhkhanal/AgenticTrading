@@ -54,7 +54,9 @@ def test_the_executor_keeps_the_listed_order_within_each_side():
     assert [symbol for symbol, _, _ in fills] == ["MSFT", "AAPL"]
 
 
-def _decide(pm, orders, *, equity=1000.0):
+# Big enough that the 25% per-stock limit ($1,000) never cuts these buys; the
+# limit has its own tests (test_position_limit.py).
+def _decide(pm, orders, *, equity=4000.0):
     state = {
         "timestamp": datetime(2026, 1, 1),
         "cash": pm.cash,
@@ -99,16 +101,17 @@ def test_the_listed_order_does_not_change_the_decision():
     assert forward == backward
 
 
-def test_a_buy_the_sells_cannot_cover_is_still_skipped():
+def test_a_buy_the_sells_cannot_fully_cover_is_cut_to_what_they_pay_for():
     pm = _pm(cash=100.0)
-    # $100 cash + $200 from selling 2 AAPL < $500 for 10 MSFT.
-    assert _decide(pm, [("MSFT", "buy", 10), ("AAPL", "sell", 2)]) == [("AAPL", "sell", 2)]
-    assert pm.buys_paid_by_sells == 0
+    # $100 cash + $200 from selling 2 AAPL = $300: 6 of the 10 MSFT at $50.
+    decided = _decide(pm, [("MSFT", "buy", 10), ("AAPL", "sell", 2)])
+    assert decided == [("AAPL", "sell", 2), ("MSFT", "buy", 6)]
+    assert pm.buys_paid_by_sells == 1
 
 
-def test_without_a_sell_a_buy_over_the_cash_is_skipped_as_before():
+def test_without_a_sell_a_buy_over_the_cash_is_cut_to_the_cash():
     pm = _pm(cash=100.0)
-    assert _decide(pm, [("MSFT", "buy", 10)]) == []
+    assert _decide(pm, [("MSFT", "buy", 10)]) == [("MSFT", "buy", 2)]
     assert pm.buys_paid_by_sells == 0
 
 
