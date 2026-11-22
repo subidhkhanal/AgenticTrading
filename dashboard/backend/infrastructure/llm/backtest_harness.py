@@ -311,6 +311,48 @@ def _trim_extra_closing_braces(text: str) -> str:
         text = text[: closers[-1]]
 
 
+_JSON_DECODER = json.JSONDecoder()
+
+
+def _last_complete_answer(text: str) -> Optional[Dict]:
+    """The last complete top-level JSON object in ``text``, or ``None``.
+
+    For a reply the first-``{``-to-last-``}`` slice cannot read: the model
+    answered, wrote "Wait - cash is only $56." and answered again (14 of 525
+    real Sonnet 4.6 decision calls), or put a brace in its prose. Only a
+    ``{`` outside any unclosed brace is tried, so a truncated envelope's
+    finished inner orders never pass for an answer and the reply stays
+    ``None`` for its truncation retry. Prefers the last object holding
+    ``actions``, so a trailing scrap of JSON cannot replace the decision.
+    Still JSON or nothing: no text outside a complete object is read.
+    """
+    found = []
+    depth = 0
+    position = 0
+    while True:
+        for offset, brace in _structural_braces(text[position:]):
+            index = position + offset
+            if brace == "}":
+                depth = max(depth - 1, 0)
+                continue
+            if depth == 0:
+                try:
+                    value, end = _JSON_DECODER.raw_decode(text, index)
+                except json.JSONDecodeError:
+                    depth = 1
+                    continue
+                if isinstance(value, dict):
+                    found.append(value)
+                position = end
+                break
+            depth += 1
+        else:
+            break
+    with_actions = [value for value in found if "actions" in value]
+    candidates = with_actions or found
+    return candidates[-1] if candidates else None
+
+
 def parse_llm_response(llm_response: str) -> Optional[Dict]:
     """Parse the LLM response into a decision dict, or ``None`` on failure.
 
@@ -350,8 +392,13 @@ def parse_llm_response(llm_response: str) -> Optional[Dict]:
             decision = json.loads(json_str)
             print(f"   ✅ JSON parsed successfully")
         except json.JSONDecodeError as e:
-            # Try to fix common formatting issues
             print(f"   ⚠️  Initial parse failed: {e}")
+            decision = _last_complete_answer(response_cleaned)
+            if decision is not None:
+                print("   ✅ Read the last complete answer in the reply")
+                print(f"   Actions from LLM: {len(decision.get('actions', []))}")
+                return decision
+            # Try to fix common formatting issues
             print(f"   Attempting to fix JSON formatting...")
 
             json_str_fixed = fix_json_formatting(json_str)
